@@ -23,6 +23,12 @@ func (m Model) getWrappedLines(width int) []string {
 		}
 		lines = append(lines, "") // space after query
 
+		// Tool call events if present
+		for _, event := range msg.ToolEvents {
+			lines = append(lines, "  "+colorOrange+event+colorReset)
+			lines = append(lines, "")
+		}
+
 		// Thought block if present
 		if msg.Thought != "" {
 			thoughtTimeStr := fmt.Sprintf("%.1fs", msg.TotalTime.Seconds())
@@ -81,6 +87,12 @@ func (m Model) getWrappedLines(width int) []string {
 			}
 		}
 		lines = append(lines, "")
+
+		// Tool call events for in-flight query
+		for _, event := range m.ToolEvents {
+			lines = append(lines, "  "+colorOrange+event+colorReset)
+			lines = append(lines, "")
+		}
 
 		thought, resp, isThinking := llm.ParseStream(m.RawStreamBuffer)
 
@@ -146,7 +158,24 @@ func (m Model) View() tea.View {
 	W := m.Width
 	H := m.Height
 
+	modalActive := m.ModalMode != ""
+	var modalLines []string
+	if modalActive {
+		modalLines = m.renderModal(W)
+	}
+
+	autocompleteActive := m.autocompleteVisible() && !modalActive
+	var autocompleteLines []string
+	if autocompleteActive {
+		autocompleteLines = m.renderAutocomplete(W)
+	}
+
 	viewportHeight := H - 10
+	if modalActive {
+		viewportHeight = H - 2 - len(modalLines)
+	} else if autocompleteActive {
+		viewportHeight = H - 10 - len(autocompleteLines)
+	}
 	if viewportHeight < 3 {
 		viewportHeight = 3
 	}
@@ -166,6 +195,10 @@ func (m Model) View() tea.View {
 	sb.WriteString(" 🚀 LLM Stock Analysis Harness")
 	sb.WriteString(colorReset)
 	sb.WriteString(" (")
+	if m.LlmClient.Model() != "" {
+		sb.WriteString(m.LlmClient.Model())
+		sb.WriteString(" @ ")
+	}
 	sb.WriteString(m.LlmClient.URL())
 	sb.WriteString(")\n")
 	sb.WriteString(colorGrey)
@@ -183,82 +216,98 @@ func (m Model) View() tea.View {
 		sb.WriteString("\n")
 	}
 
-	// 3. Input Box (bordered)
-	sb.WriteString(colorGrey)
-	sb.WriteString("┌")
-	sb.WriteString(strings.Repeat("─", W-2))
-	sb.WriteString("┐")
-	sb.WriteString(colorReset)
-	sb.WriteString("\n")
-
-	promptLabel := colorCyan + "Prompt" + colorReset + colorGrey + " · LLM " + colorReset
-
-	inputText := m.Input
-	cursorStr := "█"
-
-	inputLineContent := "  " + promptLabel + " " + inputText + cursorStr
-
-	contentLen := visualLength(inputLineContent)
-	paddingLen := W - 2 - contentLen
-	if paddingLen < 0 {
-		paddingLen = 0
-	}
-
-	sb.WriteString(colorGrey)
-	sb.WriteString("│")
-	sb.WriteString(colorReset)
-	sb.WriteString(inputLineContent)
-	sb.WriteString(strings.Repeat(" ", paddingLen))
-	sb.WriteString(colorGrey)
-	sb.WriteString("│")
-	sb.WriteString(colorReset)
-	sb.WriteString("\n")
-	sb.WriteString(colorGrey)
-	sb.WriteString("└")
-	sb.WriteString(strings.Repeat("─", W-2))
-	sb.WriteString("┘")
-	sb.WriteString(colorReset)
-	sb.WriteString("\n")
-
-	// 4. Bottom status
-	var statsParts []string
-	if m.TotalTime > 0 {
-		statsParts = append(statsParts, fmt.Sprintf("Total: %.1fs", m.TotalTime.Seconds()))
-	} else if m.Loading {
-		elapsed := time.Since(m.StartTime)
-		statsParts = append(statsParts, fmt.Sprintf("Total: %.1fs", elapsed.Seconds()))
-	}
-
-	if len(m.QueryQueue) > 0 {
-		statsParts = append(statsParts, fmt.Sprintf("Queued: %d", len(m.QueryQueue)))
-	}
-
-	if m.Ttft > 0 {
-		statsParts = append(statsParts, fmt.Sprintf("TTFT: %.1fs", m.Ttft.Seconds()))
-	}
-
-	if m.PromptTokens > 0 {
-		if m.Ttft > 0 {
-			speed := float64(m.PromptTokens) / m.Ttft.Seconds()
-			statsParts = append(statsParts, fmt.Sprintf("Prompt Speed: %.1f tok/s", speed))
+	// 3. Autocomplete dropdown, Input Box (bordered), or Modal overlay
+	if autocompleteActive {
+		for _, line := range autocompleteLines {
+			sb.WriteString(line)
+			sb.WriteString(colorReset)
+			sb.WriteString("\n")
 		}
-		statsParts = append(statsParts, fmt.Sprintf("Prompt: %d tok", m.PromptTokens))
 	}
 
-	statsParts = append(statsParts, fmt.Sprintf("Buffer: %d (ctrl+↑/↓)", m.MaxHistorySize))
-	statsParts = append(statsParts, "ctrl+c quit")
-	statsText := strings.Join(statsParts, " · ")
+	if modalActive {
+		for _, line := range modalLines {
+			sb.WriteString(line)
+			sb.WriteString(colorReset)
+			sb.WriteString("\n")
+		}
+	} else {
+		sb.WriteString(colorGrey)
+		sb.WriteString("┌")
+		sb.WriteString(strings.Repeat("─", W-2))
+		sb.WriteString("┐")
+		sb.WriteString(colorReset)
+		sb.WriteString("\n")
 
-	statsLen := visualLength(statsText)
-	statsPadding := W - statsLen - 2
-	if statsPadding < 0 {
-		statsPadding = 0
+		promptLabel := colorCyan + "Prompt" + colorReset + colorGrey + " · LLM " + colorReset
+
+		inputText := m.Input
+		cursorStr := "█"
+
+		inputLineContent := "  " + promptLabel + " " + inputText + cursorStr
+
+		contentLen := visualLength(inputLineContent)
+		paddingLen := W - 2 - contentLen
+		if paddingLen < 0 {
+			paddingLen = 0
+		}
+
+		sb.WriteString(colorGrey)
+		sb.WriteString("│")
+		sb.WriteString(colorReset)
+		sb.WriteString(inputLineContent)
+		sb.WriteString(strings.Repeat(" ", paddingLen))
+		sb.WriteString(colorGrey)
+		sb.WriteString("│")
+		sb.WriteString(colorReset)
+		sb.WriteString("\n")
+		sb.WriteString(colorGrey)
+		sb.WriteString("└")
+		sb.WriteString(strings.Repeat("─", W-2))
+		sb.WriteString("┘")
+		sb.WriteString(colorReset)
+		sb.WriteString("\n")
+
+		// 4. Bottom status
+		var statsParts []string
+		if m.TotalTime > 0 {
+			statsParts = append(statsParts, fmt.Sprintf("Total: %.1fs", m.TotalTime.Seconds()))
+		} else if m.Loading {
+			elapsed := time.Since(m.StartTime)
+			statsParts = append(statsParts, fmt.Sprintf("Total: %.1fs", elapsed.Seconds()))
+		}
+
+		if len(m.QueryQueue) > 0 {
+			statsParts = append(statsParts, fmt.Sprintf("Queued: %d", len(m.QueryQueue)))
+		}
+
+		if m.Ttft > 0 {
+			statsParts = append(statsParts, fmt.Sprintf("TTFT: %.1fs", m.Ttft.Seconds()))
+		}
+
+		if m.PromptTokens > 0 {
+			if m.Ttft > 0 {
+				speed := float64(m.PromptTokens) / m.Ttft.Seconds()
+				statsParts = append(statsParts, fmt.Sprintf("Prompt Speed: %.1f tok/s", speed))
+			}
+			statsParts = append(statsParts, fmt.Sprintf("Prompt: %d tok", m.PromptTokens))
+		}
+
+		statsParts = append(statsParts, fmt.Sprintf("Buffer: %d (ctrl+↑/↓)", m.MaxHistorySize))
+		statsParts = append(statsParts, "ctrl+c quit")
+		statsText := strings.Join(statsParts, " · ")
+
+		statsLen := visualLength(statsText)
+		statsPadding := W - statsLen - 2
+		if statsPadding < 0 {
+			statsPadding = 0
+		}
+		sb.WriteString(strings.Repeat(" ", statsPadding))
+		sb.WriteString(colorGrey)
+		sb.WriteString(statsText)
+		sb.WriteString(colorReset)
+		sb.WriteString("\n")
 	}
-	sb.WriteString(strings.Repeat(" ", statsPadding))
-	sb.WriteString(colorGrey)
-	sb.WriteString(statsText)
-	sb.WriteString(colorReset)
-	sb.WriteString("\n")
 
 	v := tea.NewView(sb.String() + "\x1b[?1000h\x1b[?1006h")
 	v.AltScreen = true

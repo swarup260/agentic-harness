@@ -7,12 +7,17 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/swarup260/agent-harness-loop/internal/config"
 	"github.com/swarup260/agent-harness-loop/internal/llm"
+	"github.com/swarup260/agent-harness-loop/internal/tools"
 )
 
 func createTestModel() Model {
 	cfg := config.DefaultConfig()
-	llmClient := llm.NewClient(cfg.LLMURL)
-	return NewModel(cfg, llmClient)
+	p := cfg.ActiveProviderConfig()
+	llmClient := llm.NewClient(p.BaseURL, p.APIKey, p.Model, cfg.Seed, cfg.Temperature)
+	registry := tools.NewRegistry()
+	registry.Register(&tools.StockInfoTool{})
+	registry.Register(&tools.FinancialsTool{})
+	return NewModel(cfg, llmClient, registry, "")
 }
 
 func TestCommands(t *testing.T) {

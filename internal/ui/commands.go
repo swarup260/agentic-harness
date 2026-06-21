@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -27,6 +28,8 @@ func (m Model) handleSlashCommand(trimmed string) (Model, tea.Cmd) {
 			"• `/clear` - Clear chat history\n" +
 			"• `/history [limit]` - Get or set the maximum history size\n" +
 			"• `/url [new_url]` - Get or set the LLM base URL\n" +
+			"• `/provider` - Add a new LLM provider (name, URL, API key)\n" +
+			"• `/connect` - Switch to a stored provider\n" +
 			"• `/system [prompt]` - Get or set the system prompt\n" +
 			"• `/copy [response/query]` - Copy last response or query to clipboard\n" +
 			"• `/quit` - Quit the application\n\n" +
@@ -71,9 +74,40 @@ func (m Model) handleSlashCommand(trimmed string) (Model, tea.Cmd) {
 			responseText = fmt.Sprintf("Current LLM base URL is %s.", m.LlmClient.URL())
 		} else {
 			newURL := parts[1]
-			m.LlmClient = llm.NewClient(newURL)
+			if p, ok := m.Config.Providers[m.Config.ActiveProvider]; ok {
+				p.BaseURL = newURL
+				m.Config.Providers[m.Config.ActiveProvider] = p
+			}
+			m.LlmClient = llm.NewClient(newURL, m.LlmClient.APIKey(), m.LlmClient.Model(), m.Config.Seed, m.Config.Temperature)
 			responseText = fmt.Sprintf("LLM base URL updated to %s.", newURL)
 		}
+
+	case "/provider":
+		m.ModalMode = "provider_form"
+		m.FormName = ""
+		m.FormBaseURL = ""
+		m.FormAPIKey = ""
+		m.FormField = 0
+		m.Input = ""
+		m.SavedInput = ""
+		m.HistoryIndex = len(m.History)
+		m.AutoScroll = true
+		return m, nil
+
+	case "/connect":
+		names := make([]string, 0, len(m.Config.Providers))
+		for name := range m.Config.Providers {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		m.ModalMode = "connect_list"
+		m.ConnectNames = names
+		m.ConnectIndex = 0
+		m.Input = ""
+		m.SavedInput = ""
+		m.HistoryIndex = len(m.History)
+		m.AutoScroll = true
+		return m, nil
 
 	case "/system":
 		if len(parts) < 2 {
